@@ -609,19 +609,22 @@ pub fn disp_col_norm(col: [f32; 4], divisor: f32) -> String {
     )
 }
 
-pub fn toggle_fullscreen(ctx: &egui::Context, state: &mut OculanteState) {
-    let fullscreen = ctx.input(|i| i.viewport().fullscreen).unwrap_or(false);
+/// Prepare a fullscreen toggle, returning the new fullscreen state for the shell to apply.
+///
+/// The window shell owns the viewport, so this only adapts the image transform:
+/// when entering fullscreen the image is offset by the window's screen position so the
+/// pixel under the cursor keeps its screen location. `window_pos` is that top-left corner,
+/// and `is_fullscreen` is the state the window is currently in.
+pub fn toggle_fullscreen(
+    state: &mut OculanteState,
+    is_fullscreen: bool,
+    window_pos: (f32, f32),
+) -> bool {
+    let fullscreen = !is_fullscreen;
 
-    if !fullscreen {
+    if fullscreen {
         // Entering fullscreen: offset image by window position so the pixel
         // under the cursor stays in the same screen location.
-        let window_pos = ctx
-            .input(|i| i.viewport().outer_rect)
-            .map(|r| (r.left(), r.top()))
-            .unwrap_or((0.0, 0.0));
-
-        // The menu bar offset: in fullscreen the top panel disappears in zen mode,
-        // but the available_rect shift covers that. We just need the window origin.
         let offset = (window_pos.0 as i32, window_pos.1 as i32);
 
         debug!("Entering fullscreen. Window pos: {:?}", offset);
@@ -635,7 +638,8 @@ pub fn toggle_fullscreen(ctx: &egui::Context, state: &mut OculanteState) {
         state.image_geometry.offset.y -= sf.1 as f32;
         state.fullscreen_offset = None;
     }
-    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
+
+    fullscreen
 }
 
 /// Determine if an enxtension is compatible with oculante
@@ -885,8 +889,10 @@ pub fn detailed_version() -> String {
     }
 }
 
-/// Set the window title
-pub fn set_title(ctx: &egui::Context, state: &mut OculanteState) {
+/// Build the window title from the configured `title_format`.
+///
+/// The shell applies the returned string to its window itself.
+pub fn window_title(state: &OculanteState) -> String {
     let p = state.current_path.clone().unwrap_or_default();
 
     let mut title_string = state
@@ -927,14 +933,17 @@ pub fn set_title(ctx: &egui::Context, state: &mut OculanteState) {
         ));
     }
 
-    ctx.send_viewport_cmd(egui::ViewportCommand::Title(title_string));
+    title_string
 }
 
 pub fn fit(oldvalue: f32, oldmin: f32, oldmax: f32, newmin: f32, newmax: f32) -> f32 {
     (((oldvalue - oldmin) * (newmax - newmin)) / (oldmax - oldmin)) + newmin
 }
 
-pub fn toggle_zen_mode(state: &mut OculanteState, ctx: &egui::Context) {
+/// Flip zen mode, notifying the user how to leave it again.
+///
+/// The shell is responsible for pushing the new window title via [`window_title`].
+pub fn toggle_zen_mode(state: &mut OculanteState) {
     state.persistent_settings.zen_mode = !state.persistent_settings.zen_mode;
     if state.persistent_settings.zen_mode && state.persistent_settings.show_zen_mode_notification {
         _ = state.message_channel.0.send(Message::Info(format!(
@@ -942,7 +951,6 @@ pub fn toggle_zen_mode(state: &mut OculanteState, ctx: &egui::Context) {
             lookup(&state.persistent_settings.shortcuts, &InputEvent::ZenMode)
         )));
     }
-    set_title(ctx, state);
 }
 
 /// Fix missing exif by re-applying exif to saved files

@@ -1,129 +1,32 @@
-use super::icons::*;
 #[cfg(feature = "file_open")]
 use crate::appstate::OculanteState;
-use crate::file_encoder::FileEncoder;
-use crate::settings::VolatileSettings;
-use crate::thumbnails::{THUMB_CAPTION_HEIGHT, THUMB_SIZE, Thumbnails};
-use crate::ui::{BUTTON_HEIGHT_LARGE, EguiExt, render_file_icon};
+use crate::thumbnails::Thumbnails;
 
-use dirs;
-use egui::{self, *};
 use log::debug;
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-use strum::IntoEnumIterator;
 
-pub fn browse_modal<F: FnMut(&PathBuf)>(
-    save: bool,
-    filter: &[&str],
-    settings: &mut VolatileSettings,
-    mut callback: F,
-    ctx: &egui::Context,
-    popup_id: Id,
-) {
-    let mut path = ctx
-        .data(|r| r.get_temp::<PathBuf>(Id::new("FBPATH")))
-        .unwrap_or_else(|| settings.last_open_directory.clone());
-
-    let mut open = true;
-
-    egui::Window::new(if save { "Save" } else { "Open" })
-        .collapsible(false)
-        .open(&mut open)
-        .resizable(true)
-        .default_width(822.)
-        .default_height(600.)
-        .show(ctx, |ui| {
-            browse(
-                &mut path,
-                filter,
-                settings,
-                save,
-                |p| {
-                    callback(p);
-                    crate::ui::close_popup(ctx, popup_id);
-                },
-                ui,
-            );
-
-            if ui.ctx().input(|r| r.key_pressed(Key::Escape)) {
-                crate::ui::close_popup(ctx, popup_id);
-            }
-            ctx.data_mut(|w| w.insert_temp(Id::new("FBPATH"), path));
-        });
-    if !open {
-        crate::ui::close_popup(ctx, popup_id);
-    }
-}
-
+/// A drive as shown in the browser's sidebar.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct Disk {
-    name: String,
-    path: PathBuf,
+pub struct Disk {
+    pub name: String,
+    pub path: PathBuf,
 }
 
+/// The listing state of a file browser dialog.
 #[derive(Debug, Clone)]
 pub struct BrowserState {
-    filename: String,
-    thumbnails: Thumbnails,
-    search_term: String,
-    search_active: bool,
-    listview_active: bool,
-    path_active: bool,
+    pub filename: String,
+    pub thumbnails: Thumbnails,
+    pub search_term: String,
+    pub search_active: bool,
+    pub listview_active: bool,
+    pub path_active: bool,
     pub entries: Option<Vec<PathBuf>>,
     pub last_dir: BrowserDir,
-    drives: Option<Vec<Disk>>,
-}
-
-impl BrowserState {
-    /// Check if the directory needs to be reloaded based on the current [`BrowserDir`].
-    pub fn check_refresh_entries(ui: &Ui, last_dir: BrowserDir, this_parent: Option<&Path>) {
-        let (saved_last_dir, last_parent_eq) = ui
-            .ctx()
-            .data(|r| r.get_temp::<BrowserState>(Id::new("FBSTATE")))
-            .map(|state| {
-                (
-                    state.last_dir,
-                    state
-                        .entries
-                        .as_deref()
-                        .and_then(|entries| {
-                            let entry = entries.first()?;
-                            entry.parent()
-                        })
-                        .map(|last_parent| Some(last_parent) == this_parent)
-                        .unwrap_or_default(),
-                )
-            })
-            .unzip();
-        let last_parent_eq = last_parent_eq.unwrap_or_default();
-
-        // Refresh the file browser state if the CWD changed.
-        // This can mean that the current image's dir is different from the last image's dir or
-        // that the user switched file browser modes.
-        //
-        // So, the path should refresh if the user shift clicked previously (current image
-        // mode) and clicked this time (last dir mode) or vice versa.
-        //
-        // OR we should refresh the directory if the user shift clicked previously AND this time
-        // BUT the two images are in different directories.
-        if saved_last_dir != Some(last_dir)
-            || saved_last_dir == Some(BrowserDir::CurrentImageDir)
-            || !last_parent_eq
-        {
-            ui.ctx().data_mut(|w| {
-                w.remove::<BrowserState>(Id::new("FBSTATE"));
-
-                let state = BrowserState {
-                    last_dir,
-                    ..Default::default()
-                };
-                w.insert_temp(Id::new("FBSTATE"), state)
-            });
-        }
-    }
+    pub drives: Option<Vec<Disk>>,
 }
 
 impl Default for BrowserState {
@@ -142,524 +45,154 @@ impl Default for BrowserState {
     }
 }
 
-pub fn browse<F: FnMut(&PathBuf)>(
-    path: &mut PathBuf,
-    filter: &[&str],
-    settings: &mut VolatileSettings,
-    save: bool,
-    mut callback: F,
-    ui: &mut Ui,
-) {
-    let mut prev_path = path.clone();
+impl BrowserState {
+    /// Whether the listing must be re-read, based on the current [`BrowserDir`].
+    ///
+    /// The entries are stale if the CWD changed.
+    /// Refresh the file browser state if the CWD changed.
+    /// This can mean that the current image's dir is different from the last image's dir or
+    /// that the user switched file browser modes.
+    ///
+    /// So, the path should refresh if the user shift clicked previously (current image
+    /// mode) and clicked this time (last dir mode) or vice versa.
+    ///
+    /// OR we should refresh the directory if the user shift clicked previously AND this time
+    /// BUT the two images are in different directories.
+    pub fn check_refresh_entries(&self, last_dir: BrowserDir, this_parent: Option<&Path>) -> bool {
+        let last_parent_eq = self
+            .entries
+            .as_deref()
+            .and_then(|entries| entries.first())
+            .and_then(|entry| entry.parent())
+            .map(|last_parent| Some(last_parent) == this_parent)
+            .unwrap_or_default();
 
-    let mut state = ui
-        .ctx()
-        .data(|r| r.get_temp::<BrowserState>(Id::new("FBSTATE")))
-        .unwrap_or_default();
-
-    if state.entries.is_none() {
-        // mark prev_path as dirty. This is to cause a reload at first start
-        prev_path = Default::default();
+        self.last_dir != last_dir || self.last_dir == BrowserDir::CurrentImageDir || !last_parent_eq
     }
 
-    if state.drives.is_none() {
-        let mut disks: Vec<Disk> = sysinfo::Disks::new_with_refreshed_list()
-            .iter()
-            .inspect(|d| debug!("d {:?}", d))
-            .filter(|d| {
-                if cfg!(target_os = "windows") {
-                    true
-                } else {
-                    d.is_removable()
-                }
-            })
-            .map(|d| Disk {
-                name: if cfg!(target_os = "windows") {
-                    d.mount_point().to_string_lossy().to_string()
-                } else {
-                    d.name().to_string_lossy().to_string()
-                },
-                path: d.mount_point().to_path_buf(),
-            })
-            .collect();
-        disks.sort();
-        disks.dedup_by(|a, b| a.name == b.name);
-        state.drives = Some(disks);
+    /// Drop the current listing and remember which directory mode it was opened with,
+    /// so the entries are scanned again.
+    pub fn reset_for_dir(&mut self, last_dir: BrowserDir) {
+        *self = Self {
+            last_dir,
+            ..Default::default()
+        };
     }
 
-    let b_entries: Vec<PathBuf> = vec![];
-    let entries = state
-        .entries
-        .as_ref()
-        .unwrap_or(&b_entries)
+    /// The drives of this machine, scanned once and then cached.
+    pub fn refresh_drives(&mut self) {
+        if self.drives.is_none() {
+            self.drives = Some(list_drives());
+        }
+    }
+
+    /// The scanned entries that match the current search term.
+    pub fn filtered_entries(&self) -> Vec<&PathBuf> {
+        filter_entries(
+            self.entries.as_deref().unwrap_or_default(),
+            &self.search_term,
+        )
+    }
+}
+
+/// Enumerate the drives that should show up in the browser.
+///
+/// On Windows every mount point is interesting, elsewhere only removable drives are listed.
+pub fn list_drives() -> Vec<Disk> {
+    let mut disks: Vec<Disk> = sysinfo::Disks::new_with_refreshed_list()
+        .iter()
+        .inspect(|d| debug!("d {:?}", d))
+        .filter(|d| {
+            if cfg!(target_os = "windows") {
+                true
+            } else {
+                d.is_removable()
+            }
+        })
+        .map(|d| Disk {
+            name: if cfg!(target_os = "windows") {
+                d.mount_point().to_string_lossy().to_string()
+            } else {
+                d.name().to_string_lossy().to_string()
+            },
+            path: d.mount_point().to_path_buf(),
+        })
+        .collect();
+    disks.sort();
+    disks.dedup_by(|a, b| a.name == b.name);
+    disks
+}
+
+/// Read a directory for the browser listing.
+///
+/// Hidden entries (those starting with a dot) are skipped, as are files whose extension is
+/// not in `filter`. Directories are sorted first, everything else case-insensitively by name.
+/// `None` means the directory could not be read.
+pub fn read_dir_entries(path: &Path, filter: &[&str]) -> Option<Vec<PathBuf>> {
+    match fs::read_dir(path) {
+        Ok(contents) => {
+            debug!("Successfully read {}", path.display());
+            let mut contents = contents
+                .into_iter()
+                .flatten()
+                .filter(|de| !de.file_name().to_string_lossy().starts_with("."))
+                .filter(|de| {
+                    de.path().is_dir() || filter.contains(&de.path().ext().to_lowercase().as_str())
+                })
+                .map(|d| d.path())
+                .collect::<Vec<_>>();
+
+            contents.sort_by(|a, b| {
+                a.file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_default()
+                    .to_lowercase()
+                    .cmp(
+                        &b.file_name()
+                            .map(|f| f.to_string_lossy().to_string())
+                            .unwrap_or_default()
+                            .to_lowercase(),
+                    )
+            });
+            contents.sort_by_key(|b| std::cmp::Reverse(b.is_dir()));
+            Some(contents)
+        }
+        Err(_e) => None,
+    }
+}
+
+/// Entries whose file name contains `search_term`, ignoring case.
+pub fn filter_entries<'a>(entries: &'a [PathBuf], search_term: &str) -> Vec<&'a PathBuf> {
+    entries
         .iter()
         .filter(|e| {
             e.file_name()
                 .map(|f| f.to_string_lossy().to_string())
                 .unwrap_or_default()
                 .to_lowercase()
-                .contains(&state.search_term.to_lowercase())
+                .contains(&search_term.to_lowercase())
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
 
-    let num_entries = entries.len();
+/// Make sure a save filename carries an extension the dialog offers.
+///
+/// When the current extension is not part of `filter`, the first filter item is used
+/// instead (e.g. when saving a LUT as `.cube` rather than `.png`).
+/// Returns the corrected filename together with the extension in use.
+pub fn validated_filename(filename: &str, filter: &[&str]) -> (String, String) {
+    let mut ext = Path::new(filename).ext();
+    let mut filename = filename.to_string();
 
-    let item_spacing = 6.;
-    ui.add_space(item_spacing);
-
-    // The navigation bar
-    ui.horizontal_wrapped(|ui| {
-        ui.add_space(item_spacing);
-
-        let search_icon = if state.search_active { BOLDX } else { SEARCH };
-        let mut lock_search_focus = false;
-
-        if ui
-            .add(
-                egui::Button::new(
-                    RichText::new(search_icon).color(ui.style().visuals.selection.bg_fill),
-                )
-                .corner_radius(ui.get_rounding(BUTTON_HEIGHT_LARGE))
-                .min_size(vec2(BUTTON_HEIGHT_LARGE, BUTTON_HEIGHT_LARGE)), // .shortcut_text("sds")
-            )
-            .clicked()
-        {
-            lock_search_focus = true;
-            state.search_active = !state.search_active;
-            if !state.search_active {
-                state.search_term.clear();
-            }
-        }
-        let textinput_width = if state.search_term.len() < 10 {
-            (ui.ctx().animate_bool("id".into(), state.search_active) * 88.) as usize
-        } else {
-            ui.available_width() as usize
-        };
-
-        if state.search_active {
-            ui.scope(|ui| {
-                ui.visuals_mut().selection.stroke = Stroke::NONE;
-                ui.visuals_mut().widgets.active.corner_radius =
-                    CornerRadius::same(ui.get_rounding(BUTTON_HEIGHT_LARGE));
-                ui.visuals_mut().widgets.inactive.corner_radius =
-                    CornerRadius::same(ui.get_rounding(BUTTON_HEIGHT_LARGE));
-                ui.visuals_mut().widgets.hovered.corner_radius =
-                    CornerRadius::same(ui.get_rounding(BUTTON_HEIGHT_LARGE));
-                let resp = ui.add(
-                    TextEdit::singleline(&mut state.search_term)
-                        .min_size(vec2(0., BUTTON_HEIGHT_LARGE))
-                        .desired_width(textinput_width as f32)
-                        .vertical_align(Align::Center),
-                );
-
-                if lock_search_focus {
-                    ui.memory_mut(|r| r.request_focus(resp.id));
-                }
-            });
-        }
-        if state.search_term.len() >= 10 {
-            ui.end_row();
-            ui.add_space(item_spacing);
-        }
-        if ui
-            .add(
-                egui::Button::new(
-                    RichText::new(CHEVRON_UP).color(ui.style().visuals.selection.bg_fill),
-                )
-                .corner_radius(ui.get_rounding(BUTTON_HEIGHT_LARGE))
-                .min_size(vec2(BUTTON_HEIGHT_LARGE, BUTTON_HEIGHT_LARGE)), // .shortcut_text("sds")
-            )
-            .clicked()
-            && let Some(d) = path.parent()
-        {
-            let p = d.to_path_buf();
-            *path = p;
-        }
-
-        let path_icon = if state.path_active { FOLDER } else { TERMINAL };
-
-        if ui
-            .add(
-                egui::Button::new(
-                    RichText::new(path_icon).color(ui.style().visuals.selection.bg_fill),
-                )
-                .corner_radius(ui.get_rounding(BUTTON_HEIGHT_LARGE))
-                .min_size(vec2(BUTTON_HEIGHT_LARGE, BUTTON_HEIGHT_LARGE)), // .shortcut_text("sds")
-            )
-            .clicked()
-        {
-            state.path_active = !state.path_active;
-        }
-
-        let current_dir = if path.is_dir() {
-            path.clone()
-        } else {
-            path.parent().map(|p| p.to_path_buf()).unwrap_or_default()
-        };
-
-        let cp = path.clone();
-        // Too many folders make the dialog too large, cap them at this amount
-        // the width, minus the left buttons roughly
-        let mut available_width = ui.available_size_before_wrap().x;
-        let mut max_nav_items = 0;
-        // go through ancestors from the back
-        for ancestor in cp.ancestors() {
-            let ancestor_stem = ancestor
-                .file_name()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or("Computer".to_string());
-            let ancestor_len = ancestor_stem.len() as f32 * 11.5
-                + ui.spacing().button_padding.x * 2.
-                + ui.spacing().item_spacing.x * 2.;
-            if available_width - ancestor_len > 0. {
-                max_nav_items += 1;
-                available_width -= ancestor_len;
-            } else {
-                break;
-            }
-        }
-
-        let mut ancestors = cp
-            .ancestors()
-            .take(max_nav_items.max(1))
-            .collect::<Vec<_>>();
-        ancestors.reverse();
-
-        if state.path_active {
-            ui.scope(|ui| {
-                let textinput_width = (ui.ctx().animate_bool("path".into(), state.path_active)
-                    * ui.available_width()) as usize;
-                let mut path_string = path.to_string_lossy().to_string();
-                ui.visuals_mut().selection.stroke = Stroke::NONE;
-                ui.visuals_mut().widgets.active.corner_radius =
-                    CornerRadius::same(ui.get_rounding(BUTTON_HEIGHT_LARGE));
-                ui.visuals_mut().widgets.inactive.corner_radius =
-                    CornerRadius::same(ui.get_rounding(BUTTON_HEIGHT_LARGE));
-                ui.visuals_mut().widgets.hovered.corner_radius =
-                    CornerRadius::same(ui.get_rounding(BUTTON_HEIGHT_LARGE));
-                let resp = ui.add(
-                    TextEdit::singleline(&mut path_string)
-                        .min_size(vec2(0., BUTTON_HEIGHT_LARGE))
-                        .desired_width(textinput_width as f32)
-                        .vertical_align(Align::Center),
-                );
-
-                if resp.changed() {
-                    *path = PathBuf::from(path_string);
-                }
-            });
-
-            // let r = ui.add(TextEdit::singleline(&mut path_string));
-        } else {
-            for c in ancestors {
-                let label = c
-                    .file_name()
-                    .map(|f| f.to_string_lossy().to_string())
-                    .unwrap_or("Computer".into());
-                if ui
-                    .styled_selectable_label(current_dir == c, format!("{label}  {CARET_RIGHT}"))
-                    .clicked()
-                {
-                    *path = PathBuf::from(c);
-                }
-            }
-        }
-    });
-
-    ui.horizontal(|ui| {
-        ui.add_space(item_spacing);
-        ui.allocate_ui_with_layout(
-            Vec2::new(120., ui.available_height()),
-            Layout::top_down_justified(Align::LEFT),
-            |ui| {
-                if let Some(d) = dirs::home_dir()
-                    && ui.styled_button(format!("{FOLDER} Home")).clicked()
-                {
-                    *path = d;
-                }
-                if let Some(drives) = state.drives.as_ref() {
-                    for drive in drives {
-                        if ui
-                            .styled_button(format!("{DRIVE} {}", drive.name))
-                            .clicked()
-                        {
-                            *path = drive.path.clone();
-                        }
-                    }
-                }
-                if let Some(d) = dirs::desktop_dir()
-                    && ui
-                        .styled_button(format!("{FOLDERDESKTOP} Desktop"))
-                        .clicked()
-                {
-                    *path = d;
-                }
-                if let Some(d) = dirs::document_dir()
-                    && ui
-                        .styled_button(format!("{FOLDERDOCUMENT} Documents"))
-                        .clicked()
-                {
-                    *path = d;
-                }
-                if let Some(d) = dirs::download_dir()
-                    && ui
-                        .styled_button(format!("{FOLDERDOWNLOAD} Downloads"))
-                        .clicked()
-                {
-                    *path = d;
-                }
-                if let Some(d) = dirs::picture_dir()
-                    && ui
-                        .styled_button(format!("{FOLDERIMAGE} Pictures"))
-                        .clicked()
-                {
-                    *path = d;
-                }
-
-                for folder in &settings.folder_bookmarks.clone() {
-                    let res = ui.styled_button(format!(
-                        "{FOLDERBOOKMARK} {}",
-                        folder
-                            .file_name()
-                            .map(|x| x.to_string_lossy().to_string())
-                            .unwrap_or_default()
-                    ));
-
-                    if res.clicked() {
-                        *path = folder.clone();
-                    }
-
-                    if res.hovered() {
-                        if ui.input(|r| r.key_released(Key::D))
-                            && !ui.ctx().egui_wants_keyboard_input()
-                        {
-                            settings.folder_bookmarks.remove(folder);
-                        }
-                        if ui.input(|r| r.pointer.secondary_released()) {
-                            settings.folder_bookmarks.remove(folder);
-                        }
-                    }
-                    res.on_hover_text("Right click or 'd' to delete!");
-                }
-
-                ui.vertical_centered_justified(|ui| {
-                    let col = ui.style().visuals.widgets.inactive.weak_bg_fill;
-                    if ui
-                        .add(
-                            egui::Button::new(RichText::new(PLUS).color(col))
-                                .corner_radius(ui.get_rounding(BUTTON_HEIGHT_LARGE))
-                                .fill(Color32::TRANSPARENT)
-                                .frame(true)
-                                .stroke(Stroke::new(2., col))
-                                .min_size(vec2(140., BUTTON_HEIGHT_LARGE)),
-                        )
-                        .clicked()
-                    {
-                        settings.folder_bookmarks.insert(path.clone());
-                    }
-                });
-            },
-        );
-
-        ui.vertical(|ui| {
-            let panel_bg_color = match ui.style().visuals.dark_mode {
-                true => Color32::from_gray(13),
-                false => Color32::from_gray(217),
-            };
-
-            let r = ui.available_rect_before_wrap();
-
-            let spacing = ui.style().spacing.item_spacing.x;
-            let w = r.width() - spacing * 3. + 2.;
-
-            let thumbs_per_row = (w / (THUMB_SIZE[0] as f32 + spacing))
-                .floor()
-                .max(1.)
-                .min(num_entries as f32);
-            let num_rows = (num_entries as f32 / (thumbs_per_row).max(1.)).ceil() as usize;
-
-            egui::Frame::new()
-                .fill(panel_bg_color)
-                .corner_radius(ui.style().visuals.widgets.active.corner_radius * 2.0)
-                .inner_margin(Margin::same(10))
-                .show(ui, |ui| {
-                    egui::ScrollArea::new([false, true])
-                        .min_scrolled_height(400.)
-                        .auto_shrink([false, false])
-                        .scroll_source(egui::containers::scroll_area::ScrollSource::ALL)
-                        .show_rows(
-                            ui,
-                            (THUMB_SIZE[1] + THUMB_CAPTION_HEIGHT) as f32,
-                            num_rows,
-                            |ui, row_range| {
-                                let range = (row_range.start * thumbs_per_row as usize)
-                                    ..(row_range.end * thumbs_per_row as usize).min(num_entries);
-                                let mut visible_entries: Vec<&PathBuf> = vec![];
-                                for i in range {
-                                    if let Some(e) = entries.get(i) {
-                                        visible_entries.push(e);
-                                    }
-                                }
-                                if state.listview_active {
-                                } else {
-                                    ui.horizontal_wrapped(|ui| {
-                                        if visible_entries.is_empty() {
-                                            let r = ui.label("Empty directory");
-                                            let r = r.interact(Sense::click());
-                                            if r.clicked()
-                                                && let Some(parent) = path.parent()
-                                            {
-                                                *path = parent.to_path_buf();
-                                            }
-                                        } else {
-                                            // render directories
-                                            for de in visible_entries.iter().filter(|e| e.is_dir())
-                                            {
-                                                if render_file_icon(de, ui, &mut state.thumbnails)
-                                                    .clicked()
-                                                {
-                                                    *path = de.to_path_buf();
-                                                    // If user has a search term active, we want to
-                                                    // clear it when changing dir
-                                                    if state.search_active {
-                                                        state.search_term.clear();
-                                                    }
-                                                }
-                                            }
-
-                                            for de in visible_entries {
-                                                if de.is_file()
-                                                    && render_file_icon(
-                                                        de,
-                                                        ui,
-                                                        &mut state.thumbnails,
-                                                    )
-                                                    .clicked()
-                                                {
-                                                    settings.last_open_directory = if de.is_file() {
-                                                        de.parent()
-                                                            .and_then(|parent| {
-                                                                parent.canonicalize().ok()
-                                                            })
-                                                            .unwrap_or_default()
-                                                    } else {
-                                                        de.clone()
-                                                    };
-                                                    if !save {
-                                                        state.search_active = false;
-                                                        state.search_term.clear();
-                                                        callback(de);
-                                                    } else {
-                                                        state.filename = de
-                                                            .file_name()
-                                                            .map(|f| {
-                                                                f.to_string_lossy().to_string()
-                                                            })
-                                                            .unwrap_or_default();
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    });
-                                }
-                            },
-                        );
-                });
-
-            // ui.add_space(10.);
-
-            if save {
-                let mut ext = Path::new(&state.filename).ext();
-
-                // Safeguard: if saving as lut, ase etc, make sure the extension matches. If not, choose the first filter item.
-                if !filter.contains(&ext.as_str()) {
-                    ext = filter.first().map(|e| e.to_string()).unwrap_or(ext.clone());
-                    state.filename = Path::new(&state.filename)
-                        .with_extension(&ext)
-                        .to_string_lossy()
-                        .to_string();
-                }
-
-                ui.label("Filename");
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().button_padding = Vec2::new(2., 5.);
-                    let textinput = ui.add(
-                        egui::TextEdit::singleline(&mut state.filename)
-                            .min_size(Vec2::new(10., 28.)),
-                    );
-
-                    if prev_path == PathBuf::default() {
-                        textinput.request_focus();
-                    }
-
-                    for f in FileEncoder::iter() {
-                        if !filter.contains(&f.ext().as_str()) {
-                            continue;
-                        }
-                        let e = f.ext();
-                        if ui.add(egui::Button::new(&e).selected(ext == e)).clicked() {
-                            state.filename = Path::new(&state.filename)
-                                .with_extension(&e)
-                                .to_string_lossy()
-                                .to_string();
-                        }
-                    }
-
-                    if ui.button("   Save file   ".to_string()).clicked() {
-                        state.search_active = false;
-                        state.search_term.clear();
-                        prev_path = Default::default();
-                        callback(&path.join(state.filename.clone()));
-                    }
-                });
-
-                for fe in settings.encoding_options.iter_mut() {
-                    if ext.to_lowercase() == fe.ext() {
-                        fe.ui(ui);
-                    }
-                }
-            }
-        });
-    });
-
-    if prev_path != *path {
-        match fs::read_dir(&path) {
-            Ok(contents) => {
-                debug!("Successfully read {}", path.display());
-                let mut contents = contents
-                    .into_iter()
-                    .flatten()
-                    .filter(|de| !de.file_name().to_string_lossy().starts_with("."))
-                    .filter(|de| {
-                        de.path().is_dir()
-                            || filter.contains(&de.path().ext().to_lowercase().as_str())
-                    })
-                    .map(|d| d.path())
-                    .collect::<Vec<_>>();
-
-                contents.sort_by(|a, b| {
-                    a.file_name()
-                        .map(|f| f.to_string_lossy().to_string())
-                        .unwrap_or_default()
-                        .to_lowercase()
-                        .cmp(
-                            &b.file_name()
-                                .map(|f| f.to_string_lossy().to_string())
-                                .unwrap_or_default()
-                                .to_lowercase(),
-                        )
-                });
-                contents.sort_by_key(|b| std::cmp::Reverse(b.is_dir()));
-                state.entries = Some(contents);
-            }
-            Err(_e) => {
-                state.entries = None;
-            }
-        }
+    if !filter.contains(&ext.as_str()) {
+        ext = filter.first().map(|e| e.to_string()).unwrap_or(ext.clone());
+        filename = Path::new(&filename)
+            .with_extension(&ext)
+            .to_string_lossy()
+            .to_string();
     }
 
-    ui.ctx()
-        .data_mut(|r| r.insert_temp::<BrowserState>(Id::new("FBSTATE"), state));
+    (filename, ext)
 }
 
 trait PathExt {

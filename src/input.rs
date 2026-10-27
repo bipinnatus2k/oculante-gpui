@@ -1,3 +1,2 @@
-// This module is reserved for future input abstractions during the
-// notan-to-eframe migration. Keyboard input is now handled directly
-// via egui::Context in shortcuts.rs.
+// This module is reserved for future input abstractions.
+// Keyboard input is currently handled by the toolkit-agnostic key matching in `shortcuts.rs`.

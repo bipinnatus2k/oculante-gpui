@@ -1,24 +1,25 @@
-#![windows_subsystem = "windows"]
+// Keep the console attached for debug builds so gpui-side logs are visible when run
+// from a terminal; release builds stay a GUI subsystem app.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
-use std::sync::{Arc, mpsc};
+use std::sync::mpsc;
 
 use clap::{Arg, Command};
 use env_logger::Builder;
 use log::{LevelFilter, error};
 
-use oculante::app::OculanteApp;
 use oculante::appstate::OculanteState;
 use oculante::scrubber::find_first_image_in_directory;
 use oculante::utils::{Frame, Player};
 use oculante::window_config::build_window_settings;
 
-fn main() -> eframe::Result<()> {
+fn main() {
     let mut builder = Builder::from_default_env();
     if std::env::var("RUST_LOG").is_err() {
         builder
             .filter_level(LevelFilter::Debug) // Default level
-            .filter_module("eframe", LevelFilter::Off)
+            .filter_module("gpui", LevelFilter::Off)
             .filter_module("tracing", LevelFilter::Off)
             .filter_module("wgpu_core", LevelFilter::Off)
             .filter_module("winit", LevelFilter::Off)
@@ -138,45 +139,5 @@ fn main() -> eframe::Result<()> {
 
     let ws = build_window_settings();
 
-    // Load application icon from embedded ICO
-    let icon = {
-        let icon_data = include_bytes!("../res/icons/icon.ico");
-        image::load_from_memory(icon_data).ok().map(|img| {
-            let rgba = img.to_rgba8();
-            egui::IconData {
-                rgba: rgba.as_raw().clone(),
-                width: rgba.width(),
-                height: rgba.height(),
-            }
-        })
-    };
-
-    let mut viewport = egui::ViewportBuilder::default()
-        .with_inner_size([ws.width as f32, ws.height as f32])
-        .with_min_inner_size([
-            ws.min_size.map(|s| s.0).unwrap_or(100) as f32,
-            ws.min_size.map(|s| s.1).unwrap_or(100) as f32,
-        ])
-        .with_title(ws.title)
-        .with_decorations(ws.decorations);
-
-    if let Some(icon) = icon {
-        viewport = viewport.with_icon(Arc::new(icon));
-    }
-
-    let options = eframe::NativeOptions {
-        viewport,
-        renderer: eframe::Renderer::Glow,
-        glow_options: egui_glow::GlowConfiguration {
-            vsync: ws.vsync,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    eframe::run_native(
-        "oculante",
-        options,
-        Box::new(|_cc| Ok(Box::new(OculanteApp::new(state)))),
-    )
+    oculante::gpui_app::run(state, ws);
 }

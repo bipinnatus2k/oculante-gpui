@@ -29,14 +29,14 @@ name = "oculante"
 
 [dependencies]
 env_logger = "0.11"
-glam = "0.33"
-eframe = { version = "0.35", default-features = false, features = ["glow"] }
-egui_glow = "0.35"
-glow = "0.17"
-# === EGUI
-egui = { version = "0.35", features = ["serde"] }
-egui_plot = "0.36"
-egui_extras = { version = "0.35", features = ["image", "file"] }
+#glam = "0.33"
+#eframe = { version = "0.35", default-features = false, features = ["glow"] }
+#egui_glow = "0.35"
+#glow = "0.17"
+## === EGUI
+#egui = { version = "0.35", features = ["serde"] }
+#egui_plot = "0.36"
+#egui_extras = { version = "0.35", features = ["image", "file"] }
 
 # === IMAGE FORMATS
 avif-decode = { version = "1.0", optional = true }
@@ -103,7 +103,7 @@ file-format = "0.29"
 zip = "8.6"
 sysinfo = "0.39"
 unicode-segmentation = "1.13.3"
-font-kit = "0.14"
+#font-kit = "0.14"
 open = "5.4"
 kamadak-exif = "0.6"
 lexical-sort = "0.3"
@@ -115,6 +115,7 @@ clap = "4.6"                                                                    
 dirs = "6.0"
 num-integer = "0.1.46"
 image-extras = "0.1.1"
+gpui-kit = "0.7.1"
 
 [features]
 default = ["turbo", "avif_native", "j2k", "jxlcms"]
@@ -131,18 +132,18 @@ lang_support = []
 [target.'cfg(target_os = "macos")'.dependencies]
 fruitbasket = "0.10.0"
 
-[target.'cfg(target_os = "linux")'.dependencies]
-eframe = { version = "0.35", default-features = false, features = [
-    "glow",
-    "x11",
-    "wayland",
-] }
+#[target.'cfg(target_os = "linux")'.dependencies]
+#eframe = { version = "0.35", default-features = false, features = [
+#    "glow",
+#    "x11",
+#    "wayland",
+#] }
 
-[target.'cfg(any(target_os = "freebsd", target_os = "netbsd"))'.dependencies]
-eframe = { version = "0.35", default-features = false, features = [
-    "glow",
-    "x11",
-] }
+#[target.'cfg(any(target_os = "freebsd", target_os = "netbsd"))'.dependencies]
+#eframe = { version = "0.35", default-features = false, features = [
+#    "glow",
+#    "x11",
+#] }
 
 [target.'cfg(windows)'.build-dependencies]
 # this currently causes a link error LNK1356, check in the future if the problem was solved

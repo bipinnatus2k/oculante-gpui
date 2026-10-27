@@ -1,6 +1,5 @@
 use crate::{file_encoder::FileEncoder, shortcuts::*, utils::ColorChannel};
 use anyhow::{Result, anyhow};
-use egui::{Context, Theme, Visuals};
 use log::{debug, info, trace};
 use serde::{Deserialize, Serialize};
 
@@ -233,14 +232,6 @@ impl VolatileSettings {
         serde_json::to_writer_pretty(f, self)?;
         trace!("Saved volatile settings");
         Ok(())
-    }
-}
-
-pub fn set_system_theme(ctx: &Context) {
-    match ctx.system_theme() {
-        Some(Theme::Dark) => ctx.set_visuals(Visuals::dark()),
-        Some(Theme::Light) => ctx.set_visuals(Visuals::light()),
-        None => ctx.set_visuals(Visuals::dark()),
     }
 }
 

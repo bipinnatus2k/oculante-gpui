@@ -1,8 +1,8 @@
-pub mod app;
+// The egui/eframe shell was the porting reference for the gpui UI and is no longer
+// on disk; everything below is framework-free core shared by both.
 pub mod appstate;
 pub mod cache;
 pub mod comparelist;
-pub mod glow_renderer;
 pub mod image_editing;
 pub mod image_loader;
 pub mod input;
@@ -14,6 +14,7 @@ pub const FONT: &[u8; 309828] = include_bytes!("../res/fonts/Inter-Regular.ttf")
 pub const BOLD_FONT: &[u8; 344152] = include_bytes!("../res/fonts/Inter-Bold.ttf");
 pub mod file_encoder;
 pub mod filebrowser;
+pub mod gpui_app;
 pub mod icons;
 pub mod net;
 pub mod paint;
@@ -21,7 +22,6 @@ pub mod scrubber;
 // texture_wrapper removed — replaced by glow_renderer
 pub mod thumbnails;
 pub mod toasts;
-pub mod ui;
 pub mod window_config;
 
 // mod events;

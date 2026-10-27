@@ -1,8 +1,56 @@
-use egui::{Color32, Pos2};
 use image::{Pixel, Rgba, RgbaImage};
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
 use serde::{Deserialize, Serialize};
+
+/// A point in image space, in pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Point {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Point {
+    pub fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+
+    fn distance(self, other: Self) -> f32 {
+        ((self.x - other.x).powi(2) + (self.y - other.y).powi(2)).sqrt()
+    }
+}
+
+/// Evenly spaced dot centers along a polyline, `spacing` pixels apart.
+///
+/// This replaces the toolkit-specific dotted line of the previous renderer: it walks
+/// consecutive points and steps along each segment.
+fn dotted_line(points: &[Point], spacing: f32) -> Vec<Point> {
+    if points.len() < 2 || spacing <= 0.0 {
+        return vec![];
+    }
+
+    let mut dots = vec![];
+
+    for (p0, p1) in points.iter().zip(&points[1..]) {
+        let length = p0.distance(*p1);
+        if length <= 0.0 {
+            continue;
+        }
+
+        let dir = Point::new((p1.x - p0.x) / length, (p1.y - p0.y) / length);
+
+        let mut travelled = 0.0;
+        while travelled < length {
+            dots.push(Point::new(
+                p0.x + dir.x * travelled,
+                p0.y + dir.y * travelled,
+            ));
+            travelled += spacing;
+        }
+    }
+
+    dots
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PaintStroke {
@@ -54,19 +102,12 @@ impl PaintStroke {
         let abs_points = self
             .points
             .iter()
-            .map(|p| Pos2::new(img.width() as f32 * p.0, img.height() as f32 * p.1))
+            .map(|p| Point::new(img.width() as f32 * p.0, img.height() as f32 * p.1))
             .collect::<Vec<_>>();
 
-        let points = egui::Shape::dotted_line(
-            &abs_points,
-            Color32::DARK_RED,
-            (brush.width() as f32 / 4.0).max(1.5), // .min(60.)
-            0.,
-        );
+        let points = dotted_line(&abs_points, (brush.width() as f32 / 4.0).max(1.5));
 
-        for (i, p) in points.iter().enumerate() {
-            let pos_on_line = p.visual_bounding_rect().center();
-
+        for (i, pos_on_line) in points.iter().enumerate() {
             if self.flip_random {
                 // seed by brush position so randomness only changes per brush instance
                 let mut rng =
@@ -96,23 +137,22 @@ impl PaintStroke {
                 stroke_color[2] *= 2.5;
                 stroke_color[3] *= 2.5;
             }
-            paint_at(img, &brush, &pos_on_line, stroke_color);
+            paint_at(img, &brush, pos_on_line, stroke_color);
         }
     }
 }
 
-pub fn paint_at(img: &mut RgbaImage, brush: &RgbaImage, pos: &Pos2, color: [f32; 4]) {
+pub fn paint_at(img: &mut RgbaImage, brush: &RgbaImage, pos: &Point, color: [f32; 4]) {
     // To test
     // img.put_pixel(pos.x as u32, pos.y as u32, color_to_pixel(color));
     // return;
 
-    let brush_offset = Pos2::new(brush.width() as f32 / 2., brush.height() as f32 / 2.);
+    let brush_offset = Point::new(brush.width() as f32 / 2., brush.height() as f32 / 2.);
+    let top_left = Point::new(pos.x - brush_offset.x, pos.y - brush_offset.y);
 
     for (b_x, b_y, b_pixel) in brush.enumerate_pixels() {
-        if let Some(p) = img.get_pixel_mut_checked(
-            (*pos - brush_offset).x as u32 + b_x,
-            (*pos - brush_offset).y as u32 + b_y,
-        ) {
+        if let Some(p) = img.get_pixel_mut_checked(top_left.x as u32 + b_x, top_left.y as u32 + b_y)
+        {
             // multiply brush with user color os it's tinted
             let colored_pixel = Rgba([
                 (color[0] * b_pixel[0] as f32) as u8,

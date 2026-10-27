@@ -2,10 +2,184 @@ use log::{debug, error, info, warn};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::appstate::OculanteState;
-use egui::{Key, Modifiers};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize, PartialOrd, Ord)]
+/// Keyboard keys.
+///
+/// Mirrors the key names that were persisted in `config.json` while the UI was egui-based,
+/// so existing user shortcut mappings keep deserializing.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum Key {
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
+    ArrowUp,
+    Escape,
+    Tab,
+    Backspace,
+    Enter,
+    Space,
+    Insert,
+    Delete,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Copy,
+    Cut,
+    Paste,
+    Colon,
+    Comma,
+    Backslash,
+    Slash,
+    Pipe,
+    Questionmark,
+    Exclamationmark,
+    OpenBracket,
+    CloseBracket,
+    OpenCurlyBracket,
+    CloseCurlyBracket,
+    Backtick,
+    Minus,
+    Period,
+    Plus,
+    Equals,
+    Semicolon,
+    Quote,
+    Num0,
+    Num1,
+    Num2,
+    Num3,
+    Num4,
+    Num5,
+    Num6,
+    Num7,
+    Num8,
+    Num9,
+    A,
+    B,
+    C,
+    D,
+    E,
+    F,
+    G,
+    H,
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    O,
+    P,
+    Q,
+    R,
+    S,
+    T,
+    U,
+    V,
+    W,
+    X,
+    Y,
+    Z,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
+    F13,
+    F14,
+    F15,
+    F16,
+    F17,
+    F18,
+    F19,
+    F20,
+    F21,
+    F22,
+    F23,
+    F24,
+    F25,
+    F26,
+    F27,
+    F28,
+    F29,
+    F30,
+    F31,
+    F32,
+    F33,
+    F34,
+    F35,
+    BrowserBack,
+    /// egui's `Key` had variants this build cannot represent (multimedia, `Menu`, `Select`, `Match`,
+    /// `Undo`, `Redo`, lock keys, …). Without a catch-all one of those names in an existing
+    /// `config.json` fails the whole `PersistentSettings` read, and `OculanteState::default()` turns
+    /// that into `unwrap_or_default()` — every preference and the entire keymap silently reset.
+    /// An unrepresentable binding now degrades to an unbound key instead.
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct Modifiers {
+    pub alt: bool,
+    pub ctrl: bool,
+    pub shift: bool,
+    pub mac_cmd: bool,
+    /// Ctrl on non-Mac, Cmd on Mac.
+    pub command: bool,
+}
+
+impl Modifiers {
+    pub const NONE: Self = Self {
+        alt: false,
+        ctrl: false,
+        shift: false,
+        mac_cmd: false,
+        command: false,
+    };
+    pub const ALT: Self = Self {
+        alt: true,
+        ..Self::NONE
+    };
+    pub const CTRL: Self = Self {
+        ctrl: true,
+        command: true,
+        ..Self::NONE
+    };
+    pub const SHIFT: Self = Self {
+        shift: true,
+        ..Self::NONE
+    };
+    pub const MAC_CMD: Self = Self {
+        mac_cmd: true,
+        command: true,
+        ..Self::NONE
+    };
+
+    fn command_or_mac(&self) -> bool {
+        self.mac_cmd || self.command
+    }
+}
+
+/// A key press, independent of any UI toolkit.
+///
+/// GPUI only reports presses (there are no key-release keystroke events), so press
+/// is the only state a shortcut can match on.
+#[derive(Clone, Copy, Debug)]
+pub struct KeyEvent {
+    pub key: Key,
+    pub modifiers: Modifiers,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Serialize, Deserialize, PartialOrd, Ord)]
 pub enum InputEvent {
     AlwaysOnTop,
     Fullscreen,
@@ -93,13 +267,21 @@ impl Shortcut {
         }
     }
 
+    fn triggered_by(&self, event: &KeyEvent) -> bool {
+        self.keys.iter().any(|key| *key == event.key)
+            && event.modifiers.shift == self.modifiers.shift
+            && event.modifiers.alt == self.modifiers.alt
+            && event.modifiers.ctrl == self.modifiers.ctrl
+            && event.modifiers.command_or_mac() == self.modifiers.command_or_mac()
+    }
+
     /// Human-readable display string
     pub fn to_string_pretty(&self) -> String {
         let mut parts = Vec::new();
         if self.modifiers.ctrl {
             parts.push("Ctrl".to_string());
         }
-        if self.modifiers.mac_cmd || self.modifiers.command {
+        if self.modifiers.command_or_mac() {
             parts.push("Cmd".to_string());
         }
         if self.modifiers.alt {
@@ -120,7 +302,7 @@ impl Shortcut {
         if self.modifiers.ctrl {
             parts.push("<kbd>Ctrl</kbd>".to_string());
         }
-        if self.modifiers.mac_cmd || self.modifiers.command {
+        if self.modifiers.command_or_mac() {
             parts.push("<kbd>Cmd</kbd>".to_string());
         }
         if self.modifiers.alt {
@@ -182,8 +364,9 @@ pub fn default_shortcuts() -> Shortcuts {
     s
 }
 
-/// Check if a shortcut's command is currently triggered, reading from egui input.
-pub fn key_pressed(ctx: &egui::Context, state: &mut OculanteState, command: InputEvent) -> bool {
+/// Check whether a shortcut is triggered by the key events received this update.
+/// Missing entries are repaired from the defaults, as with the previous egui-based matcher.
+pub fn key_pressed(state: &mut OculanteState, events: &[KeyEvent], command: InputEvent) -> bool {
     if state.key_grab {
         return false;
     }
@@ -210,37 +393,18 @@ pub fn key_pressed(ctx: &egui::Context, state: &mut OculanteState, command: Inpu
 
     let shortcut = shortcut.clone();
 
-    ctx.input(|input| {
-        let is_release = command == InputEvent::Fullscreen;
+    let matched = shortcut.keys.iter().all(|key| {
+        events
+            .iter()
+            .any(|e| e.key == *key && shortcut.triggered_by(e))
+    });
 
-        for key in &shortcut.keys {
-            let matched = input.events.iter().any(|event| {
-                if let egui::Event::Key {
-                    key: k,
-                    pressed,
-                    modifiers,
-                    ..
-                } = event
-                {
-                    *k == *key
-                        && *pressed != is_release
-                        && modifiers.shift == shortcut.modifiers.shift
-                        && modifiers.alt == shortcut.modifiers.alt
-                        && modifiers.ctrl == shortcut.modifiers.ctrl
-                        && (modifiers.mac_cmd || modifiers.command)
-                            == (shortcut.modifiers.mac_cmd || shortcut.modifiers.command)
-                } else {
-                    false
-                }
-            });
-            if !matched {
-                return false;
-            }
-        }
+    if !matched {
+        return false;
+    }
 
-        debug!("Matched shortcut {:?}", command);
-        true
-    })
+    debug!("Matched shortcut {:?}", command);
+    true
 }
 
 pub fn lookup(shortcuts: &Shortcuts, command: &InputEvent) -> String {
@@ -248,6 +412,44 @@ pub fn lookup(shortcuts: &Shortcuts, command: &InputEvent) -> String {
         return shortcut.to_string_pretty();
     }
     "None".into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// egui persisted key names this build cannot represent. Reading one used to fail the whole
+    /// `PersistentSettings` deserialization, and `OculanteState::default()`'s `unwrap_or_default()`
+    /// turned that error into a reset of every preference and the entire keymap.
+    #[test]
+    fn an_unrepresentable_egui_key_degrades_instead_of_failing() {
+        assert_eq!(
+            serde_json::from_str::<Key>("\"Menu\"").unwrap(),
+            Key::Unknown
+        );
+        assert_eq!(
+            serde_json::from_str::<Key>("\"MediaPlayPause\"").unwrap(),
+            Key::Unknown
+        );
+        assert_eq!(
+            serde_json::from_str::<Key>("\"ScrollLock\"").unwrap(),
+            Key::Unknown
+        );
+        assert_eq!(serde_json::from_str::<Key>("\"Home\"").unwrap(), Key::Home);
+        assert_eq!(
+            serde_json::from_str::<Key>("\"BrowserBack\"").unwrap(),
+            Key::BrowserBack
+        );
+    }
+
+    #[test]
+    fn pretty_hotkey_labels_are_just_the_key_name() {
+        let shortcuts = default_shortcuts();
+        assert_eq!(lookup(&shortcuts, &InputEvent::ResetView), "V");
+        assert_eq!(lookup(&shortcuts, &InputEvent::InfoMode), "I");
+        assert_eq!(lookup(&shortcuts, &InputEvent::RGBAChannel), "C");
+        assert_eq!(lookup(&shortcuts, &InputEvent::PreviousImage), "ArrowLeft");
+    }
 }
 
 pub fn keypresses_as_string(shortcut: &Shortcut) -> String {

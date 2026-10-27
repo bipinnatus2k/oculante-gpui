@@ -2,9 +2,7 @@
 //!
 //! To add more formats, add a variant to the `[FileEncoder]` struct.
 
-use crate::ui::EguiExt;
 use anyhow::Result;
-use egui::Ui;
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::{CompressionType, PngEncoder};
 use image::{DynamicImage, ImageEncoder};
@@ -101,43 +99,25 @@ impl FileEncoder {
         }
         Ok(())
     }
+}
 
-    pub fn ui(&mut self, ui: &mut Ui) {
-        match self {
-            FileEncoder::Jpg { quality } => {
-                ui.label("Quality");
-                ui.styled_slider(quality, 0..=100);
-            }
-            FileEncoder::Png { compressionlevel } => {
-                ui.label("Compression Level");
-                ui.horizontal_centered(|ui| {
-                    let mut level = match *compressionlevel {
-                        CompressionLevel::Fast => 0,
-                        CompressionLevel::Default => 1,
-                        CompressionLevel::Best => 2,
-                    };
-
-                    ui.styled_slider(&mut level, 0..=2);
-
-                    let label = match level {
-                        0 => "(Fast)",
-                        1 => "(Default)",
-                        2 => "(Best)",
-                        _ => unreachable!(),
-                    };
-
-                    *compressionlevel = match level {
-                        0 => CompressionLevel::Fast,
-                        1 => CompressionLevel::Default,
-                        _ => CompressionLevel::Best,
-                    };
-
-                    ui.label(label);
-                });
-            }
-            FileEncoder::Bmp => {}
-            FileEncoder::WebP => {}
-            FileEncoder::Avif => {}
-        }
+/// Save an image with the encoding options that match the destination, then re-apply its EXIF and
+/// refresh its thumbnail. The egui shell kept this in its UI module, but nothing about it is UI,
+/// so both shells share it from here.
+pub fn save_with_encoding(
+    image: &DynamicImage,
+    path: &Path,
+    image_info: &Option<crate::utils::ExtendedImageInfo>,
+    encoders: &Vec<FileEncoder>,
+) -> Result<()> {
+    let encoding_options = FileEncoder::matching_variant(path, encoders);
+    encoding_options.save(image, path)?;
+    log::debug!("Saved to {}", path.display());
+    if let Some(info) = image_info
+        && info.raw_exif.is_some()
+    {
+        crate::utils::fix_exif(path, info.raw_exif.clone())?;
     }
+    crate::thumbnails::generate(path)?;
+    Ok(())
 }
